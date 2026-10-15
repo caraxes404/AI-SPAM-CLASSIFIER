@@ -1,0 +1,143 @@
+"""
+SPAM CLASSIFIER - FINAL VERSION (works on Colab, Jupyter and normal Python)
+Data loading order:
+  1. spam.csv in the current folder (Kaggle file)
+  2. Automatic download from the internet (no upload needed)
+Install (only needed on your PC):  pip install pandas scikit-learn matplotlib seaborn joblib
+"""
+import os
+import joblib
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.pipeline import make_pipeline
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import LinearSVC
+from sklearn.metrics import (accuracy_score, classification_report,
+                             confusion_matrix)
+
+# ------------------------------------------------------------------
+# 1. LOAD DATA (no more FileNotFoundError)
+# ------------------------------------------------------------------
+URL = "https://raw.githubusercontent.com/justmarkham/pycon-2016-tutorial/master/data/sms.tsv"
+
+
+def load_data():
+    if os.path.exists("spam.csv"):                       # Kaggle file
+        print("Loading local spam.csv")
+        df = pd.read_csv("spam.csv", encoding="latin-1", usecols=[0, 1],
+                         header=0, names=["label", "text"])
+    else:                                                # download automatically
+        print("spam.csv not found -> downloading dataset from the internet...")
+        df = pd.read_csv(URL, sep="\t", header=None, names=["label", "text"])
+    df = df.dropna().drop_duplicates()
+    df["label"] = df["label"].str.strip().str.lower()
+    return df[df["label"].isin(["ham", "spam"])].reset_index(drop=True)
+
+
+df = load_data()
+y = (df["label"] == "spam").astype(int)
+print("Dataset shape:", df.shape)
+print(df["label"].value_counts(), "\n")
+
+# ------------------------------------------------------------------
+# 2. GRAPH: SPAM vs HAM
+# ------------------------------------------------------------------
+df["label"].value_counts().plot(kind="bar", color=["green", "red"])
+plt.title("Spam vs Ham Messages")
+plt.ylabel("Count")
+plt.xticks(rotation=0)
+plt.tight_layout()
+plt.savefig("graph_spam_vs_ham.png")
+plt.show()
+
+# ------------------------------------------------------------------
+# 3. TRAIN / TEST SPLIT
+# ------------------------------------------------------------------
+X_train, X_test, y_train, y_test = train_test_split(
+    df["text"], y, test_size=0.2, random_state=42, stratify=y)
+
+
+def make_model(clf):
+    # TF-IDF handles lowercasing, stopwords and word pairs by itself
+    return make_pipeline(
+        TfidfVectorizer(stop_words="english", ngram_range=(1, 2),
+                        sublinear_tf=True, min_df=2), clf)
+
+
+models = {
+    "Naive Bayes": MultinomialNB(alpha=0.1),
+    "Logistic Regression": LogisticRegression(max_iter=1000, class_weight="balanced"),
+    "Linear SVM": LinearSVC(class_weight="balanced"),
+}
+
+# ------------------------------------------------------------------
+# 4. PICK THE BEST MODEL USING 5-FOLD CROSS-VALIDATION
+# ------------------------------------------------------------------
+scores = {n: cross_val_score(make_model(c), X_train, y_train,
+                             cv=5, scoring="f1").mean()
+          for n, c in models.items()}
+print("Cross-validated F1 scores:")
+for n, s in scores.items():
+    print(f"  {n:20s}: {s:.4f}")
+
+best = max(scores, key=scores.get)
+pipe = make_model(models[best]).fit(X_train, y_train)
+print(f"\nBest model: {best}")
+
+# ------------------------------------------------------------------
+# 5. EVALUATE
+# ------------------------------------------------------------------
+pred = pipe.predict(X_test)
+print(f"\nTest accuracy: {accuracy_score(y_test, pred):.4f}\n")
+print(classification_report(y_test, pred, target_names=["Ham", "Spam"], digits=4))
+
+cm = confusion_matrix(y_test, pred)
+print("Confusion matrix:\n", cm)
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Ham", "Spam"], yticklabels=["Ham", "Spam"])
+plt.title(f"Confusion Matrix - {best}")
+plt.xlabel("Predicted")
+plt.ylabel("Actual")
+plt.tight_layout()
+plt.savefig("graph_confusion_matrix.png")
+plt.show()
+
+joblib.dump(pipe, "spam_model.joblib")
+print("\nModel saved as spam_model.joblib")
+
+
+# ------------------------------------------------------------------
+# 6. PREDICT NEW MESSAGES
+# ------------------------------------------------------------------
+def check(msg):
+    return "SPAM" if pipe.predict([msg])[0] == 1 else "NOT SPAM"
+
+
+samples = [
+    "Congratulations! You won a free iPhone. Click the link to claim now!",
+    "Hey, are we meeting at the library at 5 pm today?",
+    "URGENT! Your account is blocked. Call 09061234567 to claim cash prize",
+    "Please send me the notes from yesterday's class",
+]
+print("\nSAMPLE PREDICTIONS")
+for s in samples:
+    print(f"  [{check(s):8s}] {s}")
+
+# ------------------------------------------------------------------
+# 7. LIVE CHECKER (in Colab the input box appears below the cell)
+# ------------------------------------------------------------------
+print("\nLIVE SPAM CHECKER - type 'quit' to stop")
+while True:
+    try:
+        msg = input("Enter message: ").strip()
+    except EOFError:
+        break
+    if msg.lower() == "quit":
+        print("Goodbye!")
+        break
+    if msg:
+        print("->", check(msg))
